@@ -151,10 +151,6 @@ class ACEStepPipeline:
             and os.path.exists(
                 os.path.join(text_encoder_model_path, "special_tokens_map.json")
             )
-            and os.path.exists(
-                os.path.join(text_encoder_model_path, "tokenizer_config.json")
-            )
-            and os.path.exists(os.path.join(text_encoder_model_path, "tokenizer.json"))
         )
 
         if not files_exist:
@@ -163,84 +159,111 @@ class ACEStepPipeline:
             )
 
             # download music dcae model
-            os.makedirs(dcae_model_path, exist_ok=True)
             hf_hub_download(
                 repo_id=REPO_ID,
                 subfolder="music_dcae_f8c8",
                 filename="config.json",
-                cache_dir=checkpoint_dir,
+                local_dir=checkpoint_dir,
+                local_dir_use_symlinks=False,
             )
             hf_hub_download(
                 repo_id=REPO_ID,
                 subfolder="music_dcae_f8c8",
                 filename="diffusion_pytorch_model.safetensors",
-                cache_dir=checkpoint_dir,
+                local_dir=checkpoint_dir,
+                local_dir_use_symlinks=False,
             )
 
             # download vocoder model
-            os.makedirs(vocoder_model_path, exist_ok=True)
             hf_hub_download(
                 repo_id=REPO_ID,
                 subfolder="music_vocoder",
                 filename="config.json",
-                cache_dir=checkpoint_dir,
+                local_dir=checkpoint_dir,
+                local_dir_use_symlinks=False,
             )
             hf_hub_download(
                 repo_id=REPO_ID,
                 subfolder="music_vocoder",
                 filename="diffusion_pytorch_model.safetensors",
-                cache_dir=checkpoint_dir,
+                local_dir=checkpoint_dir,
+                local_dir_use_symlinks=False,
             )
 
             # download ace_step transformer model
-            os.makedirs(ace_step_model_path, exist_ok=True)
             hf_hub_download(
                 repo_id=REPO_ID,
                 subfolder="ace_step_transformer",
                 filename="config.json",
-                cache_dir=checkpoint_dir,
+                local_dir=checkpoint_dir,
+                local_dir_use_symlinks=False,
             )
             hf_hub_download(
                 repo_id=REPO_ID,
                 subfolder="ace_step_transformer",
                 filename="diffusion_pytorch_model.safetensors",
-                cache_dir=checkpoint_dir,
+                local_dir=checkpoint_dir,
+                local_dir_use_symlinks=False,
             )
 
             # download text encoder model
-            os.makedirs(text_encoder_model_path, exist_ok=True)
+            # os.makedirs(text_encoder_model_path, exist_ok=True) # hf_hub_download should create subdirectories
             hf_hub_download(
                 repo_id=REPO_ID,
                 subfolder="umt5-base",
                 filename="config.json",
-                cache_dir=checkpoint_dir,
+                local_dir=checkpoint_dir,
+                local_dir_use_symlinks=False,
             )
             hf_hub_download(
                 repo_id=REPO_ID,
                 subfolder="umt5-base",
                 filename="model.safetensors",
-                cache_dir=checkpoint_dir,
+                local_dir=checkpoint_dir,
+                local_dir_use_symlinks=False,
             )
             hf_hub_download(
                 repo_id=REPO_ID,
                 subfolder="umt5-base",
                 filename="special_tokens_map.json",
                 local_dir=checkpoint_dir,
+                local_dir_use_symlinks=False,
             )
             hf_hub_download(
                 repo_id=REPO_ID,
                 subfolder="umt5-base",
                 filename="tokenizer_config.json",
                 local_dir=checkpoint_dir,
+                local_dir_use_symlinks=False,
             )
             hf_hub_download(
                 repo_id=REPO_ID,
                 subfolder="umt5-base",
                 filename="tokenizer.json",
                 local_dir=checkpoint_dir,
+                local_dir_use_symlinks=False,
             )
 
-            logger.info("Models downloaded")
+            # Verify files were downloaded correctly
+            if not all([
+                os.path.exists(os.path.join(dcae_model_path, "config.json")),
+                os.path.exists(os.path.join(dcae_model_path, "diffusion_pytorch_model.safetensors")),
+                os.path.exists(os.path.join(vocoder_model_path, "config.json")),
+                os.path.exists(os.path.join(vocoder_model_path, "diffusion_pytorch_model.safetensors")),
+                os.path.exists(os.path.join(ace_step_model_path, "config.json")),
+                os.path.exists(os.path.join(ace_step_model_path, "diffusion_pytorch_model.safetensors")),
+                os.path.exists(os.path.join(text_encoder_model_path, "config.json")),
+                os.path.exists(os.path.join(text_encoder_model_path, "model.safetensors")),
+                os.path.exists(os.path.join(text_encoder_model_path, "special_tokens_map.json")),
+            ]):
+                logger.error("Failed to download all required model files. Please check your internet connection and try again.")
+                logger.info(f"DCAE model path: {dcae_model_path}, files exist: {os.path.exists(os.path.join(dcae_model_path, 'config.json'))}")
+                logger.info(f"Vocoder model path: {vocoder_model_path}, files exist: {os.path.exists(os.path.join(vocoder_model_path, 'config.json'))}")
+                logger.info(f"ACE-Step model path: {ace_step_model_path}, files exist: {os.path.exists(os.path.join(ace_step_model_path, 'config.json'))}")
+                logger.info(f"Text encoder model path: {text_encoder_model_path}, files exist: {os.path.exists(os.path.join(text_encoder_model_path, 'config.json'))}")
+                raise RuntimeError("Model download failed. See logs for details.")
+
+            logger.info("Models downloaded successfully")
 
         dcae_checkpoint_path = dcae_model_path
         vocoder_checkpoint_path = vocoder_model_path
@@ -1329,8 +1352,8 @@ class ACEStepPipeline:
         pred_wavs = [pred_wav.cpu().float() for pred_wav in pred_wavs]
         for i in tqdm(range(bs)):
             output_audio_path = self.save_wav_file(
-                pred_wavs[i], i, sample_rate=sample_rate
-            )
+                pred_wavs[i], i, save_path=save_path, sample_rate=sample_rate, format=format
+            )            
             output_audio_paths.append(output_audio_path)
         return output_audio_paths
 
@@ -1341,15 +1364,19 @@ class ACEStepPipeline:
             logger.warning("save_path is None, using default path ./outputs/")
             base_path = f"./outputs"
             ensure_directory_exists(base_path)
+            output_path_wav = (
+                f"{base_path}/output_{time.strftime('%Y%m%d%H%M%S')}_{idx}.wav"
+            )
         else:
-            base_path = save_path
-            ensure_directory_exists(base_path)
-
-        output_path_wav = (
-            f"{base_path}/output_{time.strftime('%Y%m%d%H%M%S')}_{idx}.wav"
-        )
+            ensure_directory_exists(os.path.dirname(save_path))
+            if os.path.isdir(save_path):
+                logger.info(f"Provided save_path '{save_path}' is a directory. Appending timestamped filename.")
+                output_path_wav = os.path.join(save_path, f"output_{time.strftime('%Y%m%d%H%M%S')}_{idx}.wav")
+            else:
+                output_path_wav = save_path
+        
         target_wav = target_wav.float()
-        print(target_wav)
+        logger.info(f"Saving audio to {output_path_wav}")
         torchaudio.save(
             output_path_wav, target_wav, sample_rate=sample_rate, format=format
         )

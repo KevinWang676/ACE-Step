@@ -32,7 +32,10 @@ Rather than building yet another end-to-end text-to-music pipeline, our vision i
 
 ## 📢 News and Updates
 
-- 🚀 **2025.05.07:** [ComfyUI_ACE-Step](https://github.com/billwuhao/ComfyUI_ACE-Step) node is now available! Explore the power of ACE-Step within ComfyUI. 🎉
+- 🚀 **2025.05.08:** [ComfyUI_ACE-Step](https://t.co/GeRSTrIvn0) node is now available! Explore the power of ACE-Step within ComfyUI. 🎉
+![image](https://github.com/user-attachments/assets/0a13d90a-9086-47ee-abab-976bad20fa7c)
+
+
 - 🚀 2025.05.06: Open source demo code and model
 
 
@@ -320,6 +323,7 @@ The `examples/input_params` directory contains sample input parameters that can 
 
 3. Prepare your dataset in Huggingface format ([Huggingface Datasets documentation](https://huggingface.co/docs/datasets/index)). The dataset should contain the following fields:
    - `keys`: Unique identifier for each audio sample
+   - `filename`: Path to the audio file
    - `tags`: List of descriptive tags (e.g., `["pop", "rock"]`)
    - `norm_lyrics`: Normalized lyrics text
    - Optional fields:
@@ -330,6 +334,7 @@ Example dataset entry:
 ```json
 {
 	"keys": "1ce52937-cd1d-456f-967d-0f1072fcbb58",
+	"filename": "data/audio/1ce52937-cd1d-456f-967d-0f1072fcbb58.wav",
 	"tags": ["pop", "acoustic", "ballad", "romantic", "emotional"],
 	"speaker_emb_path": "",
 	"norm_lyrics": "I love you, I love you, I love you",
@@ -403,6 +408,13 @@ Example LoRA configuration file (lora_config.json):
 This project is licensed under [Apache License 2.0](./LICENSE)
 
 ACE-Step enables original music generation across diverse genres, with applications in creative production, education, and entertainment. While designed to support positive and artistic use cases, we acknowledge potential risks such as unintentional copyright infringement due to stylistic similarity, inappropriate blending of cultural elements, and misuse for generating harmful content. To ensure responsible use, we encourage users to verify the originality of generated works, clearly disclose AI involvement, and obtain appropriate permissions when adapting protected styles or materials. By using ACE-Step, you agree to uphold these principles and respect artistic integrity, cultural diversity, and legal compliance. The authors are not responsible for any misuse of the model, including but not limited to copyright violations, cultural insensitivity, or the generation of harmful content.
+
+🔔 Important Notice  
+The only official website for the ACE-Step project is our GitHub Pages site.    
+ We do not operate any other websites.  
+🚫 Fake domains include but are not limited to:
+ac\*\*p.com, a\*\*p.org, a\*\*\*c.org  
+⚠️ Please be cautious. Do not visit, trust, or make payments on any of those sites.
 
 ## 🙏 Acknowledgements
 
