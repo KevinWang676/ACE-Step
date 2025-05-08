@@ -9,36 +9,6 @@ from typing import Optional
 
 from acestep.pipeline_ace_step import ACEStepPipeline
 
-import torch
-from torch import nn
-
-if not hasattr(nn, "RMSNorm"):
-    class RMSNorm(nn.Module):
-        """
-        Drop‑in replacement for torch.nn.RMSNorm (PyTorch ≥ 2.0).
-        Matches HF implementation except `elementwise_affine=False` by default
-        (ACE‑Step sets it that way).
-        """
-        def __init__(self, hidden_size, eps=1e-6, elementwise_affine=False):
-            super().__init__()
-            self.eps = eps
-            self.elementwise_affine = elementwise_affine
-            if elementwise_affine:
-                self.weight = nn.Parameter(torch.ones(hidden_size))
-            else:
-                self.register_parameter("weight", None)
-            self.hidden_size = hidden_size
-
-        def forward(self, x):
-            # variance across the last dimension
-            var = x.pow(2).mean(-1, keepdim=True)
-            x = x * torch.rsqrt(var + self.eps)
-            if self.weight is not None:
-                x = x * self.weight
-            return x
-
-    nn.RMSNorm = RMSNorm  # <‑‑ makes ACE‑Step happy
-
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("lyrics-to-music-api")
@@ -94,11 +64,23 @@ async def startup_event():
     get_model()
 
 # Function to clean up after generation
-def cleanup():
+def cleanup(file_path=None):
     try:
         # Empty CUDA cache
         torch.cuda.empty_cache()
         logger.info("CUDA cache emptied")
+        
+        # Clean up generated files if path is provided
+        if file_path and os.path.exists(file_path):
+            # Remove the audio file
+            os.remove(file_path)
+            
+            # Remove the associated JSON file if it exists
+            json_path = file_path.replace(".wav", "_input_params.json")
+            if os.path.exists(json_path):
+                os.remove(json_path)
+                
+            logger.info(f"Cleaned up generated files: {file_path}")
     except Exception as e:
         logger.error(f"Error during cleanup: {e}")
 
@@ -150,15 +132,17 @@ async def generate_music(request: LyricsToMusicRequest, background_tasks: Backgr
         audio_file_path = result[0]
         logger.info(f"Music generation complete, audio saved to: {audio_file_path}")
         
-        # Schedule cleanup to run after sending the response
-        background_tasks.add_task(cleanup)
-        
-        # Return the audio file directly
-        return FileResponse(
+        # Return the audio file directly and schedule cleanup to run after sending the response
+        response = FileResponse(
             path=audio_file_path,
             filename=os.path.basename(audio_file_path),
             media_type="audio/wav"
         )
+        
+        # Schedule cleanup to run after sending the response (with the file path for deletion)
+        background_tasks.add_task(cleanup, audio_file_path)
+        
+        return response
         
     except Exception as e:
         logger.error(f"Music generation failed: {str(e)}")
