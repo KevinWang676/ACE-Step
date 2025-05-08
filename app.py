@@ -1,166 +1,171 @@
-# filename: app.py
-import os
-import uuid
-import tempfile
-import shutil
-import torch
-
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+import torch
+import os
+import time
+import logging
+from typing import Optional
 
 from acestep.pipeline_ace_step import ACEStepPipeline
-from acestep.data_sampler import DataSampler
 
+import torch
+from torch import nn
 
-# ----------------------------------------------------------------------
-# 1. Model & helper utilities
-# ----------------------------------------------------------------------
+if not hasattr(nn, "RMSNorm"):
+    class RMSNorm(nn.Module):
+        """
+        Drop‑in replacement for torch.nn.RMSNorm (PyTorch ≥ 2.0).
+        Matches HF implementation except `elementwise_affine=False` by default
+        (ACE‑Step sets it that way).
+        """
+        def __init__(self, hidden_size, eps=1e-6, elementwise_affine=False):
+            super().__init__()
+            self.eps = eps
+            self.elementwise_affine = elementwise_affine
+            if elementwise_affine:
+                self.weight = nn.Parameter(torch.ones(hidden_size))
+            else:
+                self.register_parameter("weight", None)
+            self.hidden_size = hidden_size
 
-def sample_data(json_data):
-    return (
-        json_data["audio_duration"],
-        json_data["prompt"],
-        json_data["lyrics"],
-        json_data["infer_step"],
-        json_data["guidance_scale"],
-        json_data["scheduler_type"],
-        json_data["cfg_type"],
-        json_data["omega_scale"],
-        ", ".join(map(str, json_data["actual_seeds"])),
-        json_data["guidance_interval"],
-        json_data["guidance_interval_decay"],
-        json_data["min_guidance_scale"],
-        json_data["use_erg_tag"],
-        json_data["use_erg_lyric"],
-        json_data["use_erg_diffusion"],
-        ", ".join(map(str, json_data["oss_steps"])),
-        json_data["guidance_scale_text"] if "guidance_scale_text" in json_data else 0.0,
-        (
-            json_data["guidance_scale_lyric"]
-            if "guidance_scale_lyric" in json_data
-            else 0.0
-        ),
-    )
+        def forward(self, x):
+            # variance across the last dimension
+            var = x.pow(2).mean(-1, keepdim=True)
+            x = x * torch.rsqrt(var + self.eps)
+            if self.weight is not None:
+                x = x * self.weight
+            return x
 
-def _sample_default_args() -> tuple:
-    """
-    Use the library's own DataSampler to obtain a dict of all default
-    arguments; convert it with sample_data() exactly as the original demo did.
-    """
-    return sample_data(DataSampler().sample())
+    nn.RMSNorm = RMSNorm  # <‑‑ makes ACE‑Step happy
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("lyrics-to-music-api")
 
-# Load model **once** at startup (change env var if you keep checkpoints elsewhere)
-CHECKPOINT_DIR = "ACE-Step-v1-3.5B" #os.getenv("CHECKPOINT_PATH", "")
-MODEL = ACEStepPipeline(
-    checkpoint_dir=CHECKPOINT_DIR,
-    dtype="bfloat16",          # library default
-    torch_compile=False        # safer for first deployment; enable later if desired
-)
+app = FastAPI(title="Lyrics to Music API", description="Generate music from lyrics using ACEStep model")
 
-
-# ----------------------------------------------------------------------
-# 2. FastAPI definitions
-# ----------------------------------------------------------------------
-app = FastAPI(
-    title="Lyrics‑to‑Music API",
-    description="Generate a complete music track from lyrics + text prompt.",
-    version="1.0.0",
-)
-
-
-class Lyrics2MusicRequest(BaseModel):
+# Define request model with all parameters
+class LyricsToMusicRequest(BaseModel):
     lyrics: str
     prompt: str
+    
+    # Optional parameters with default values
+    audio_duration: float = Field(default=60.0, description="Duration of the output audio in seconds")
+    infer_step: int = Field(default=60, description="Number of inference steps")
+    guidance_scale: float = Field(default=15.0, description="Guidance scale for the model")
+    scheduler_type: str = Field(default="euler", description="Scheduler type (euler or heun)")
+    cfg_type: str = Field(default="apg", description="CFG type (apg, cfg, or cfg_star)")
+    omega_scale: int = Field(default=10, description="Omega scale parameter")
+    manual_seeds: Optional[str] = Field(default=None, description="Comma-separated seeds or single seed")
+    guidance_interval: float = Field(default=0.5, description="Guidance interval parameter")
+    guidance_interval_decay: float = Field(default=0.0, description="Guidance interval decay parameter")
+    min_guidance_scale: float = Field(default=3.0, description="Minimum guidance scale")
+    use_erg_tag: bool = Field(default=True, description="Whether to use ERG tag")
+    use_erg_lyric: bool = Field(default=True, description="Whether to use ERG lyric")
+    use_erg_diffusion: bool = Field(default=True, description="Whether to use ERG diffusion")
+    oss_steps: Optional[str] = Field(default=None, description="OSS steps as comma-separated integers")
+    guidance_scale_text: float = Field(default=0.0, description="Guidance scale for text")
+    guidance_scale_lyric: float = Field(default=0.0, description="Guidance scale for lyrics")
 
+# Global variables
+model = None
+output_dir = "outputs"
+os.makedirs(output_dir, exist_ok=True)
 
-@app.post("/generate_music_ace", summary="Generate music from lyrics", response_class=FileResponse)
-async def generate_music(body: Lyrics2MusicRequest):
-    """
-    Accepts JSON:
-        {"lyrics": "...", "prompt": "…"}
-    Returns: audio/wav file containing the generated music.
-    """
-    # ------------------------------------------------------------------
-    # prepare arguments (defaults + user text)
-    # ------------------------------------------------------------------
-    (
-        audio_duration,
-        _prompt,                 # will be overwritten
-        _lyrics,                 # will be overwritten
-        infer_step,
-        guidance_scale,
-        scheduler_type,
-        cfg_type,
-        omega_scale,
-        manual_seeds,
-        guidance_interval,
-        guidance_interval_decay,
-        min_guidance_scale,
-        use_erg_tag,
-        use_erg_lyric,
-        use_erg_diffusion,
-        oss_steps,
-        guidance_scale_text,
-        guidance_scale_lyric,
-    ) = _sample_default_args()
+# Initialize the model
+def get_model():
+    global model
+    
+    if model is None:
+        logger.info("Loading ACEStepPipeline model...")
+        model = ACEStepPipeline(
+            checkpoint_dir="ACE-Step-v1-3.5B",  # Use default path
+            dtype="bfloat16", 
+            torch_compile=False,
+        )
+        logger.info("Model loaded successfully")
+    
+    return model
 
-    prompt = body.prompt
-    lyrics = body.lyrics
+@app.on_event("startup")
+async def startup_event():
+    # Pre-load the model on startup
+    get_model()
 
-    # ------------------------------------------------------------------
-    # create a temp .wav for output
-    # ------------------------------------------------------------------
-    tmp_dir = tempfile.mkdtemp()
-    outfile = os.path.join(tmp_dir, f"{uuid.uuid4()}.wav")
-
+# Function to clean up after generation
+def cleanup():
     try:
-        # ----------------------  run generation  ----------------------
-        MODEL(
-            audio_duration,
-            prompt,
-            lyrics,
-            infer_step,
-            guidance_scale,
-            scheduler_type,
-            cfg_type,
-            omega_scale,
-            manual_seeds,
-            guidance_interval,
-            guidance_interval_decay,
-            min_guidance_scale,
-            use_erg_tag,
-            use_erg_lyric,
-            use_erg_diffusion,
-            oss_steps,
-            guidance_scale_text,
-            guidance_scale_lyric,
-            save_path=outfile,
-        )
+        # Empty CUDA cache
         torch.cuda.empty_cache()
-
-        # ----------------------  return file  -------------------------
-        return FileResponse(
-            outfile,
-            media_type="audio/wav",
-            filename="lyrics2music.wav",
-            background=lambda *_: shutil.rmtree(tmp_dir, ignore_errors=True),
-        )
-
+        logger.info("CUDA cache emptied")
     except Exception as e:
-        torch.cuda.empty_cache()
-        # clean up temp directory on errors as well
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error during cleanup: {e}")
 
+@app.post("/generate-music")
+async def generate_music(request: LyricsToMusicRequest, background_tasks: BackgroundTasks):
+    """
+    Generate music from lyrics and a prompt.
+    
+    Args:
+        request: The request containing lyrics, prompt, and optional parameters
+        
+    Returns:
+        The generated audio file as a direct download
+    """
+    # Get the model
+    model = get_model()
+    
+    try:
+        # Create a unique output file path
+        timestamp = time.strftime("%Y%m%d%H%M%S")
+        output_file = f"{output_dir}/music_{timestamp}.wav"
+        
+        logger.info(f"Generating music with lyrics: {request.lyrics[:50]}... and prompt: {request.prompt[:50]}...")
+        
+        # Call the model with specified parameters
+        result = model(
+            audio_duration=request.audio_duration,
+            prompt=request.prompt,
+            lyrics=request.lyrics,
+            infer_step=request.infer_step,
+            guidance_scale=request.guidance_scale,
+            scheduler_type=request.scheduler_type,
+            cfg_type=request.cfg_type,
+            omega_scale=request.omega_scale,
+            manual_seeds=request.manual_seeds,
+            guidance_interval=request.guidance_interval,
+            guidance_interval_decay=request.guidance_interval_decay,
+            min_guidance_scale=request.min_guidance_scale,
+            use_erg_tag=request.use_erg_tag,
+            use_erg_lyric=request.use_erg_lyric,
+            use_erg_diffusion=request.use_erg_diffusion,
+            oss_steps=request.oss_steps,
+            guidance_scale_text=request.guidance_scale_text,
+            guidance_scale_lyric=request.guidance_scale_lyric,
+            save_path=output_file,
+        )
+        
+        # The first element in the result should be the audio file path
+        audio_file_path = result[0]
+        logger.info(f"Music generation complete, audio saved to: {audio_file_path}")
+        
+        # Schedule cleanup to run after sending the response
+        background_tasks.add_task(cleanup)
+        
+        # Return the audio file directly
+        return FileResponse(
+            path=audio_file_path,
+            filename=os.path.basename(audio_file_path),
+            media_type="audio/wav"
+        )
+        
+    except Exception as e:
+        logger.error(f"Music generation failed: {str(e)}")
+        # Clean up on error
+        cleanup()
+        raise HTTPException(status_code=500, detail=f"Music generation failed: {str(e)}")
 
-# ----------------------------------------------------------------------
-# 3. Uvicorn entry point
-# ----------------------------------------------------------------------
-# Run with:
-#   CHECKPOINT_PATH=/path/to/checkpoint \
-#   uvicorn app:app --host 0.0.0.0 --port 8000 --workers 1
-#
-# Increase --workers if you need multiple *processes* (each with its own GPU),
-# or use --reload during development for auto‑restart.
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8060)
