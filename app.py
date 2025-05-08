@@ -9,6 +9,35 @@ from typing import Optional
 
 from acestep.pipeline_ace_step import ACEStepPipeline
 
+from torch import nn
+
+if not hasattr(nn, "RMSNorm"):
+    class RMSNorm(nn.Module):
+        """
+        Drop‑in replacement for torch.nn.RMSNorm (PyTorch ≥ 2.0).
+        Matches HF implementation except `elementwise_affine=False` by default
+        (ACE‑Step sets it that way).
+        """
+        def __init__(self, hidden_size, eps=1e-6, elementwise_affine=False):
+            super().__init__()
+            self.eps = eps
+            self.elementwise_affine = elementwise_affine
+            if elementwise_affine:
+                self.weight = nn.Parameter(torch.ones(hidden_size))
+            else:
+                self.register_parameter("weight", None)
+            self.hidden_size = hidden_size
+
+        def forward(self, x):
+            # variance across the last dimension
+            var = x.pow(2).mean(-1, keepdim=True)
+            x = x * torch.rsqrt(var + self.eps)
+            if self.weight is not None:
+                x = x * self.weight
+            return x
+
+    nn.RMSNorm = RMSNorm  # <‑‑ makes ACE‑Step happy
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("lyrics-to-music-api")
@@ -84,7 +113,7 @@ def cleanup(file_path=None):
     except Exception as e:
         logger.error(f"Error during cleanup: {e}")
 
-@app.post("/generate-music")
+@app.post("/generate-music-ace")
 async def generate_music(request: LyricsToMusicRequest, background_tasks: BackgroundTasks):
     """
     Generate music from lyrics and a prompt.
