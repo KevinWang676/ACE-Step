@@ -67,8 +67,17 @@ class LyricsToMusicRequest(BaseModel):
     guidance_scale_text: float = Field(default=0.0, description="Guidance scale for text")
     guidance_scale_lyric: float = Field(default=0.0, description="Guidance scale for lyrics")
 
+# Define model configuration parameters
+class ModelConfig:
+    checkpoint_dir: str = "ACE-Step-v1-3.5B"  # Default checkpoint directory
+    dtype: str = "bfloat16"  # Default data type
+    torch_compile: bool = False  # Whether to use torch compile
+    cpu_offload: bool = False  # Whether to use CPU offloading
+    overlapped_decode: bool = False  # Whether to use overlapped decoding
+
 # Global variables
 model = None
+model_config = ModelConfig()
 output_dir = "outputs"
 os.makedirs(output_dir, exist_ok=True)
 
@@ -79,9 +88,11 @@ def get_model():
     if model is None:
         logger.info("Loading ACEStepPipeline model...")
         model = ACEStepPipeline(
-            checkpoint_dir="ACE-Step-v1-3.5B",  # Use default path
-            dtype="bfloat16", 
-            torch_compile=False,
+            checkpoint_dir=model_config.checkpoint_dir,
+            dtype=model_config.dtype,
+            torch_compile=model_config.torch_compile,
+            cpu_offload=model_config.cpu_offload,
+            overlapped_decode=model_config.overlapped_decode
         )
         logger.info("Model loaded successfully")
     
@@ -178,6 +189,67 @@ async def generate_music(request: LyricsToMusicRequest, background_tasks: Backgr
         # Clean up on error
         cleanup()
         raise HTTPException(status_code=500, detail=f"Music generation failed: {str(e)}")
+
+# Endpoint to update model configuration
+@app.post("/update-model-config")
+async def update_model_config(
+    checkpoint_dir: Optional[str] = None,
+    dtype: Optional[str] = None,
+    torch_compile: Optional[bool] = None,
+    cpu_offload: Optional[bool] = None,
+    overlapped_decode: Optional[bool] = None
+):
+    """
+    Update the model configuration parameters.
+    
+    Args:
+        checkpoint_dir: Path to the checkpoint directory
+        dtype: Data type to use (bfloat16 or float32)
+        torch_compile: Whether to use torch compile
+        cpu_offload: Whether to use CPU offloading
+        overlapped_decode: Whether to use overlapped decoding
+        
+    Returns:
+        The updated configuration
+    """
+    global model, model_config
+    
+    changes_made = False
+    
+    if checkpoint_dir is not None and checkpoint_dir != model_config.checkpoint_dir:
+        model_config.checkpoint_dir = checkpoint_dir
+        changes_made = True
+        
+    if dtype is not None and dtype != model_config.dtype:
+        model_config.dtype = dtype
+        changes_made = True
+        
+    if torch_compile is not None and torch_compile != model_config.torch_compile:
+        model_config.torch_compile = torch_compile
+        changes_made = True
+        
+    if cpu_offload is not None and cpu_offload != model_config.cpu_offload:
+        model_config.cpu_offload = cpu_offload
+        changes_made = True
+        
+    if overlapped_decode is not None and overlapped_decode != model_config.overlapped_decode:
+        model_config.overlapped_decode = overlapped_decode
+        changes_made = True
+        
+    # If any changes were made, set model to None to force reloading with new config
+    if changes_made:
+        model = None
+        # Trigger model reload with new configuration
+        get_model()
+        
+    return {
+        "checkpoint_dir": model_config.checkpoint_dir,
+        "dtype": model_config.dtype,
+        "torch_compile": model_config.torch_compile,
+        "cpu_offload": model_config.cpu_offload,
+        "overlapped_decode": model_config.overlapped_decode,
+        "model_reloaded": changes_made
+    }
 
 if __name__ == "__main__":
     import uvicorn
