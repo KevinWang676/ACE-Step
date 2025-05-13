@@ -71,9 +71,9 @@ class LyricsToMusicRequest(BaseModel):
 class ModelConfig:
     checkpoint_dir: str = "ACE-Step-v1-3.5B"  # Default checkpoint directory
     dtype: str = "bfloat16"  # Default data type
-    torch_compile: bool = False  # Whether to use torch compile
-    cpu_offload: bool = False  # Whether to use CPU offloading
-    overlapped_decode: bool = False  # Whether to use overlapped decoding
+    torch_compile: bool = True  # Whether to use torch compile
+    cpu_offload: bool = True  # Whether to use CPU offloading
+    overlapped_decode: bool = True  # Whether to use overlapped decoding
 
 # Global variables
 model = None
